@@ -16,13 +16,15 @@ from omni.isaac.quadruped.robots import Anymal
 from omni.isaac.core.utils.prims import define_prim, get_prim_at_path
 from omni.isaac.core.utils.nucleus import get_assets_root_path
 from pxr import Gf, UsdGeom
-
+from omni.kit.commands import create
 import omni.appwindow  # Contains handle to keyboard
 import numpy as np
 import carb
 
 # from omni.isaac.core.utils.viewports import set_camera_view
 
+from omni.isaac.core.utils.stage import get_current_stage, get_stage_units
+import typing
 
 
 class Anymal_runner(object):
@@ -38,7 +40,7 @@ class Anymal_runner(object):
         
         """
         self._world = World(stage_units_in_meters=1.0, physics_dt=physics_dt, rendering_dt=render_dt)
-
+        
         assets_root_path = get_assets_root_path()
         if assets_root_path is None:
             carb.log_error("Could not find Isaac Sim assets folder")
@@ -58,10 +60,14 @@ class Anymal_runner(object):
                 position=np.array([0, 0, 0]),
             )
         )
-
         self._world.reset()
         self._enter_toggled = 0
         self._base_command = np.zeros(3)
+        self.usd_context = omni.usd.get_context()
+        
+        omni.kit.commands.execute('CreatePrimWithDefaultXform',
+                    prim_type='Cube',
+                    attributes={'size': 100, 'extent': [(50, 50, 50), (150, 150, 150)]})
 
         # bindings for keyboard to command
         self._input_keyboard_mapping = {
@@ -115,14 +121,8 @@ class Anymal_runner(object):
         
         """
         # change to sim running
-        x = 0
         while simulation_app.is_running():
             self._world.step(render=True)
-            if x==100:
-                # self.update_camera()
-                x += 1
-            else:
-                x+=1
         return
 
     def _sub_keyboard_event(self, event, *args, **kwargs) -> bool:
@@ -146,8 +146,68 @@ class Anymal_runner(object):
                 self._base_command[0:3] -= np.array(self._input_keyboard_mapping[event.input.name])
         return True
 
-    # def update_camera(self):
-    #     set_camera_view(np.array([1, 2, 3]), '/World/GroundPlane/Camera')
+    def get_position(self, prim_path):
+        stage = self.usd_context.get_stage()
+        if not stage or self.current_path == "":
+            return 
+
+        # Get position directly from USD
+        prim = stage.GetPrimAtPath(prim_path)
+
+        loc = prim.GetAttribute("xformOp:translate") # VERY IMPORTANT: change to translate to make it translate instead of scale
+
+        return loc
+
+
+    def follow_cam(self):
+        # prim = get_prim_at_path("/World/Anymal/base")
+        # matrix: Gf.Matrix4d = omni.usd.get_world_transform_matrix(prim)
+
+
+        # translate: Gf.Vec3d = matrix.ExtractTranslation()
+        # rotation: Gf.Rotation = matrix.ExtractRotation()
+        # print(type(rotation))
+        # print(rotation)
+        # rot_decompose = rotation.DecomposeRotation()
+        # print('translate')
+        # print(translate)
+        # print('rot')
+        # print(rot_decompose)
+
+        translate=  self.get_position("/World/Anymal/base")
+        self.set_camera_view(translate - 3 * rotation[0], translate + 3 * rotation[0], "/World/GroundPlane/Camera")
+
+
+
+        # if s == "one":
+        #     self.set_camera_view(np.array([1, 2, 3]), np.array([25, 50, 10]), '/World/GroundPlane/Camera')
+        # elif s == "two":
+        #     self.set_camera_view(np.array([25, 50, 10]), np.array([1, 2, 3]), camera_prim_path='/World/GroundPlane/Camera')
+    
+    def set_camera_view(self, eye, target, camera_prim_path = "/OmniverseKit_Persp"):
+        """Set the location and target for a camera prim in the stage given its path
+
+        Args:
+            eye (typing.Optional[np.ndarray], optional): Location of camera. Defaults to None.
+            target (typing.Optional[np.ndarray], optional): Location of camera target. Defaults to None.
+            vel (float, optional): Velocity of the camera when controlling with keyboard. Defaults to 0.05.
+            camera_prim_path (str, optional): Path to camera prim being set. Defaults to "/OmniverseKit_Persp".
+        """
+        meters_per_unit = get_stage_units()
+
+        if eye is None:
+            eye = np.array([1.5, 1.5, 1.5]) / meters_per_unit
+        if target is None:
+            target = np.array([0.01, 0.01, 0.01]) / meters_per_unit
+
+        vel = .05
+
+        vel = vel / meters_per_unit
+        viewport = omni.kit.viewport_legacy.get_default_viewport_window()
+        viewport.set_camera_position(camera_prim_path, eye[0], eye[1], eye[2], True)
+        viewport.set_camera_target(camera_prim_path, target[0], target[1], target[2], True)
+        viewport.set_camera_move_velocity(vel)
+        return
 
 
 
