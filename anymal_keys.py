@@ -146,7 +146,7 @@ class Anymal_runner(object):
                 self._base_command[0:3] -= np.array(self._input_keyboard_mapping[event.input.name])
         return True
 
-    def get_position(self, prim_path):
+    def get_pose(self, prim_path):
         stage = self.usd_context.get_stage()
         if not stage or self.current_path == "":
             return 
@@ -155,9 +155,9 @@ class Anymal_runner(object):
         prim = stage.GetPrimAtPath(prim_path)
 
         loc = prim.GetAttribute("xformOp:translate") # VERY IMPORTANT: change to translate to make it translate instead of scale
+        rot = prim.GetAttribute("xformOp:rotate")
 
-        return loc
-
+        return loc, rot
 
     def follow_cam(self):
         # prim = get_prim_at_path("/World/Anymal/base")
@@ -174,9 +174,7 @@ class Anymal_runner(object):
         # print('rot')
         # print(rot_decompose)
 
-        translate=  self.get_position("/World/Anymal/base")
-        self.set_camera_view(translate - 3 * rotation[0], translate + 3 * rotation[0], "/World/GroundPlane/Camera")
-
+        pos =  self.get_position("/World/Anymal/base")
 
 
         # if s == "one":
