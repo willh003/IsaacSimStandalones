@@ -20,6 +20,7 @@ from omni.kit.commands import create
 import omni.appwindow  # Contains handle to keyboard
 import numpy as np
 import carb
+import random
 from models import BasicModel
 
 # from omni.isaac.core.utils.viewports import set_camera_view
@@ -27,6 +28,7 @@ from models import BasicModel
 from omni.isaac.core.utils.stage import get_current_stage, get_stage_units
 import typing
 from collections import deque
+import math
 
 class Anymal_runner(object):
     def __init__(self, physics_dt, render_dt) -> None:
@@ -68,7 +70,7 @@ class Anymal_runner(object):
         self.usd_context = omni.usd.get_context()
         
         # specify the target location of the anymal
-        self.target = [-3, 4.6] 
+        self.target = [5, -4] 
 
         # specify the model to use
         self.model = BasicModel()
@@ -78,6 +80,15 @@ class Anymal_runner(object):
 
         # maintain a buffer of previous locations, to check if it has stopped moving
         self.memory = deque(maxlen=20)
+
+        # the actions space of the robot
+        self.actions = ["nothing", "left", "forward", "backward", "right", "clock", "counter-clock"]
+
+        # initialize a random first action
+        self.action = random.randint(0, len(self.actions) - 1)
+
+        # number of training repetitions to run
+        self.reps = 40
 
         # literally just so I remember how to make a cube
         omni.kit.commands.execute('CreatePrimWithDefaultXform',
@@ -112,16 +123,15 @@ class Anymal_runner(object):
         else:
             if self.is_moving(tolerance=1):
                 self._anymal.advance(step_size, self.get_action())
-            else: 
+            else:
+                self._anymal.advance(step_size, np.array([0.0, 0.0, 0.0]))
                 self.reset_scene()
-
-        #self._anymal.advance(step_size, self._base_command)
 
     def setup(self) -> None:
         """
         [Summary]
 
-        Set up keyboard listener and add physics callback
+        add physics callback
         
         """
         self._appwindow = omni.appwindow.get_default_app_window()
@@ -141,14 +151,15 @@ class Anymal_runner(object):
 
     def get_action(self):
 
-        state = self.get_pose('/World/Anymal/base')
+        state = self.get_state('/World/Anymal/base')
 
+        print(state)
         # state has 3 components: loc, rot, target
-        action = self.model.get_action(state)
+        action = self.model.get_action()
         return action
 
 
-    def get_pose(self, prim_path):
+    def get_state(self, prim_path):
         stage = self.usd_context.get_stage()
         if not stage:
             return 
@@ -162,17 +173,17 @@ class Anymal_runner(object):
         loc = loc.Get()
         print(rot)
         print(loc)
-       # pose = list(loc)
-        pose = [loc[0], loc[1], loc[2], rot[0], rot[1], rot[2], rot[3]]
+        pose = list(loc)
+        #pose = [loc[0], loc[1], loc[2], rot[0], rot[1], rot[2], rot[3]]
         
-        self.memory.append(pose)
+        #self.memory.append(pose)
         
         # pose and self.target are lists
-        return {"pose": pose, "target": self.target}
+        return pose
 
     def is_moving(self, tolerance):
         """
-        True if the robot's x, y, and z position has changed by more than 
+        True if the robot's x, y, or z position has changed by more than 
         [tolerance] in the last 20 physics steps
         """
         mem = list(self.memory)
@@ -186,7 +197,68 @@ class Anymal_runner(object):
             if abs(x-x0) > tolerance or abs(y-y0) > tolerance or abs(z-z0) > tolerance:
                 return True
         return False
+    
+    def get_euclidean_distance(self, state, target):
+        return math.sqrt((target[0] - state[0]) ** 2 + (target[1] - state[1]) ** 2)
 
+    def get_reward(self, state, target):
+        return 1 / self.get_euclidean_distance(state, target)
+
+
+    def target_achieved(self, state, target, tolerance):
+        return self.get_euclidean_distance(state, target) < tolerance
+
+    
+    def setup_train(self, episodes):
+        from models import DQLAgent
+        
+        self.max_steps = 500 # hyperparameter to control max number of phys steps
+        self.current_step = 1
+        
+        self.episodes = episodes
+        self.current_episode = 1
+        self.done = False
+        self.t_reward = 0
+
+        self.agent = DQLAgent(state_space = 7, action_space = 7, gamma=.99, max_steps=self.max_steps)
+        self._appwindow = omni.appwindow.get_default_app_window()
+        self._world.add_physics_callback("anymal_advance", callback_fn=self.on_physics_step_train)
+
+    
+    def on_physics_step_train(self, step_size) -> None:
+        if self.current_episode < self.episodes:
+            if self.current_step >= self.max_steps or self.done:
+                # if done, or max steps reached, then reset the scene and variables
+
+                self.reset_scene()
+                self.current_episode += 1
+                self.current_step = 1
+                self.done = False
+
+                print(f'Episode: {self.current_episode} | Steps: {self.max_steps} | Total reward: {self.t_reward} | Epsilon: {self.agent.epsilon}')
+                self.agent.tot_reward.append(self.t_reward)
+            
+                self.t_reward = 0
+
+            state = self.get_state('/World/Anymal/base')
+            
+            action = self.agent.act(state)
+            self._anymal.advance(1, self.get_action()) # TODO: step size of 1 may not be optimal
+            next_state = self.get_state('/World/Anymal/base')
+            reward = self.get_reward(next_state)
+
+            self.done = not self.is_moving(tolerance=1) or self.target_achieved(next_state, self.target, .1)
+
+            next_state = np.reshape(next_state, [1, self.agent.osn])
+            self.agent.memorize(state, action, reward, next_state, self.done, self.current_step)
+            state = next_state
+
+            self.t_reward += reward
+
+            if len(self.agent.memory) > self.agent.batch_size:
+                self.agent.replay_batch()
+
+            self.current_step += 1
 
 def main():
     """
