@@ -34,7 +34,7 @@ class DQLAgent:
         model.compile(loss='mse', optimizer=self.opt)
         return model
 
-    def act(self, state):
+    def get_action(self, state):
         if random.random() <= self.epsilon:
             return random.randint(0, self.an - 1)
         # predict based on current environment inputs
@@ -79,6 +79,9 @@ class DQLAgent:
     def exponent_discount(self, step):
         return 1 + (-1/(.987 ** step))
 
+    def add_to_total_rewards(self, run_reward):
+        self.tot_reward.append(run_reward)
+
 
 class BasicModel:
     def __init__(self):
@@ -87,6 +90,6 @@ class BasicModel:
     def build_model(self):
         pass
 
-    def get_action(self):
+    def get_action(self, state):
         return np.array([1.0, 0.0, 0.0])
 
