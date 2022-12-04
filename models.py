@@ -7,6 +7,8 @@ from tensorflow.python.keras.optimizers import adam_v2
 import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 from tensorflow.python.client import device_lib
+import pandas as pd # trust
+import matplotlib.pyplot as plt
 print(device_lib.list_local_devices())
 
 class DQLAgent:
@@ -56,9 +58,6 @@ class DQLAgent:
         done = np.array([i[4] for i in batch])
         step_discount = np.array([self.exponent_discount(i[5]) for i in batch])
         
-        # INCLUDES DISCOUNT HERE
-        # q_val = reward + step_discount + self.gamma * np.amax(self.model.predict_on_batch(next_state), \
-        #                                     axis=1) * (1 - done)
         q_val = reward + self.gamma * np.amax(self.model.predict_on_batch(next_state), \
                                     axis=1) * (1 - done)
         target = self.model.predict_on_batch(state)
@@ -79,11 +78,54 @@ class DQLAgent:
     def exponent_discount(self, step):
         return 1 + (-1/(.987 ** step))
 
+    def save_model(self, path):
+        self.model.save(path)
+        print(self.tot_reward)
+
     def add_to_total_rewards(self, run_reward):
         self.tot_reward.append(run_reward)
 
+class ImitateAgent:
+    def __init__(self):
+        pass
 
-class BasicModel:
+    def load_data(self, filename, labels):
+        data_path = os.path.join("data", filename + ".csv")
+        train = pd.read_csv(data_path)
+        self.features = train.copy()
+        self.an = len(labels)
+        self.labels = pd.concat([self.features.pop(label) for label in labels], axis=1, join='inner')
+        self.features = np.array(self.features)
+        self.labels = np.array(self.labels)
+    
+    def build_model(self):
+        # TODO: figure out how to normalize
+        # normalize_layer = Normalization()
+        # normalize_layer.adapt(self.features)
+        model = Sequential([
+                Dense(16, activation='relu'),
+                Dense(self.an)
+                ])
+
+        model.compile(loss ='mse',
+                      optimizer =adam_v2.Adam())
+        
+        self.model = model
+
+    def train(self, epochs):
+        print(self.features.shape)
+        print("------------------")
+        print(self.labels.shape)
+        return self.model.fit(self.features, self.labels, epochs=epochs)
+
+    def graph_loss(self, losses):
+
+        plt.plot(range(1, len(losses) + 1), losses)
+        fig_path = os.path.join("models", "imitation", "loss-11-9-22")
+        plt.savefig(fig_path)
+        #plt.show()
+
+class BasicAgent:
     def __init__(self):
         self.model = self.build_model()
 

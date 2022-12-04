@@ -15,12 +15,14 @@ from omni.isaac.core import World
 from omni.isaac.quadruped.robots import Anymal
 from omni.isaac.core.utils.prims import define_prim, get_prim_at_path
 from omni.isaac.core.utils.nucleus import get_assets_root_path
-from pxr import Gf, UsdGeom
+from pxr import Gf, UsdGeom, Sdf
 from omni.kit.commands import create
 import omni.appwindow  # Contains handle to keyboard
 import numpy as np
 import carb
-
+import csv
+import sys
+import os
 # from omni.isaac.core.utils.viewports import set_camera_view
 
 from omni.isaac.core.utils.stage import get_current_stage, get_stage_units
@@ -28,7 +30,7 @@ import typing
 
 
 class Anymal_runner(object):
-    def __init__(self, physics_dt, render_dt) -> None:
+    def __init__(self, physics_dt, render_dt, filename) -> None:
         """
         Summary
 
@@ -42,6 +44,7 @@ class Anymal_runner(object):
         self._world = World(stage_units_in_meters=1.0, physics_dt=physics_dt, rendering_dt=render_dt)
         
         assets_root_path = get_assets_root_path()
+
         if assets_root_path is None:
             carb.log_error("Could not find Isaac Sim assets folder")
 
@@ -49,7 +52,7 @@ class Anymal_runner(object):
         prim = get_prim_at_path("/World/GroundPlane")
         if not prim.IsValid():
             prim = define_prim("/World/GroundPlane", "Xform")
-            asset_path = assets_root_path + "/Isaac/Environments/Simple_Warehouse/warehouse.usd"
+            asset_path = assets_root_path + "/Isaac/Environments/Simple_Warehouse/full_warehouse.usd"
             prim.GetReferences().AddReference(asset_path)
 
         self._anymal = self._world.scene.add(
@@ -60,14 +63,13 @@ class Anymal_runner(object):
                 position=np.array([0, 0, 0]),
             )
         )
+        self.reset_scene()
         self._world.reset()
         self._enter_toggled = 0
         self._base_command = np.zeros(3)
         self.usd_context = omni.usd.get_context()
         
-        omni.kit.commands.execute('CreatePrimWithDefaultXform',
-                    prim_type='Cube',
-                    attributes={'size': 100, 'extent': [(50, 50, 50), (150, 150, 150)]})
+
 
         # bindings for keyboard to command
         self._input_keyboard_mapping = {
@@ -90,6 +92,12 @@ class Anymal_runner(object):
             "NUMPAD_9": [0.0, 0.0, -1.0],
             "M": [0.0, 0.0, -1.0],
         }
+        if filename != None:
+            self.mode = "collect"
+            self.collected_data = []
+            self.data_path = os.path.join("data", filename + ".csv")
+        else:
+            self.mode = ""
 
     def setup(self) -> None:
         """
@@ -111,6 +119,12 @@ class Anymal_runner(object):
         Physics call back, switch robot mode and call robot advance function to compute and apply joint torque
         
         """
+        if self.mode == "collect":
+            state = self.get_state("/World/Anymal/base")
+            action = list(self._base_command)
+            self.collected_data.append(state + action)
+
+
         self._anymal.advance(step_size, self._base_command)
 
     def run(self) -> None:
@@ -124,6 +138,62 @@ class Anymal_runner(object):
         while simulation_app.is_running():
             self._world.step(render=True)
         return
+
+    def get_state(self, prim_path):
+        stage = self.usd_context.get_stage()
+        if not stage:
+            return 
+
+        # Get position directly from USD
+        prim = stage.GetPrimAtPath(prim_path)
+
+        loc = prim.GetAttribute("xformOp:translate") # VERY IMPORTANT: change to translate to make it translate instead of scale
+        rot = prim.GetAttribute("xformOp:orient")
+        rot = rot.Get()
+        loc = loc.Get()
+        str_nums = str(rot)[1:-1]
+        str_nums = str_nums.replace(" ", "")
+        str_nums = str_nums.split(',') 
+
+        rot = []
+        for s in str_nums:
+            rot.append(float(s))
+
+        # rot = self.euler_of_quat(rot)
+
+        pose = list(loc)
+
+        pose = [loc[0], loc[1], loc[2], rot[0], rot[1], rot[2], rot[3]]
+        
+        return pose
+
+    def save_data(self, path, data):
+        with open(path, 'w') as f:
+      
+            # using csv.writer method from CSV package
+            writer = csv.writer(f)
+            writer.writerow(["dx", "dy", "dz", "qx", "qy", "qz", "qw", "right", "forward", "rotate"])
+            
+            writer.writerows(data)
+
+    def reset_scene(self):
+        print("resetting")
+
+        # maybe the robot prim itself stays in place, while its parts move after a reset
+        # watch the anymal itself position before and after reset
+
+
+        omni.kit.commands.execute('TransformPrimSRT',
+            path=Sdf.Path('/World/Anymal/base'),
+            new_translation=Gf.Vec3d(-8.6, 13.8, .49),
+            new_rotation_euler=Gf.Vec3d(0.0, -0.0, 0.0),
+            new_rotation_order=Gf.Vec3i(0, 1, 2),
+            new_scale=Gf.Vec3d(1.0, 1.0, 1.0),
+            old_translation=Gf.Vec3d(0, 0, 0),
+            old_rotation_euler=Gf.Vec3d(0.0, -0.0, 0.0),
+            old_rotation_order=Gf.Vec3i(0, 1, 2),
+            old_scale=Gf.Vec3d(1.0, 1.0, 1.0),
+            )
 
     def _sub_keyboard_event(self, event, *args, **kwargs) -> bool:
         """
@@ -139,6 +209,13 @@ class Anymal_runner(object):
             # on pressing, the command is incremented
             if event.input.name in self._input_keyboard_mapping:
                 self._base_command[0:3] += np.array(self._input_keyboard_mapping[event.input.name])
+            elif event.input.name == "S":
+                self.save_data(self.data_path, self.collected_data)
+            elif event.input.name == "R":
+                self.reset_scene()
+            elif event.input.name == "Q":
+                self.collected_data = []
+
 
         elif event.type == carb.input.KeyboardEventType.KEY_RELEASE:
             # on release, the command is decremented
@@ -218,8 +295,12 @@ def main():
     """
     physics_dt = 1 / 100.0
     render_dt = 1 / 30.0
+    print(get_assets_root_path())
 
-    runner = Anymal_runner(physics_dt=physics_dt, render_dt=render_dt)
+    if len(sys.argv) > 2 and sys.argv[1] == "collect":
+        runner = Anymal_runner(physics_dt=physics_dt, render_dt=render_dt, filename=sys.argv[2])
+    else:
+        runner = Anymal_runner(physics_dt=physics_dt, render_dt=render_dt, filename=None)
     simulation_app.update()
     runner.setup()
 
