@@ -72,7 +72,7 @@ class Anymal_runner(object):
         self.usd_context = omni.usd.get_context()
         
         # specify the target [x, y] coordinates of the anymal in the scene
-        self.target = [5, -4] 
+        self.target = [-13, 12] 
 
         # do nothing for the first few steps
         self.counter = 0
@@ -161,7 +161,7 @@ class Anymal_runner(object):
                 self.agent.replay_batch()
         else:
             # Only save once
-            self.save_model("test_5")
+            self.save_model("iter_60")
             simulation_app.close()
 
     def on_physics_step_infer(self, step_size) -> None:
@@ -357,9 +357,6 @@ def main():
         runner._world.reset()
         runner._world.reset()
         runner.run()
-        
-        
-
         
     else:
         print("NO MODEL SPECIFIED")
